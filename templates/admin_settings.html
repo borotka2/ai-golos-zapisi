@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Настройки ИИ{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Настройки ИИ</h1>
+  <p class="page-subtitle">Ключи для транскрипции и анализа разговоров</p>
+</div>
+
+<div class="ai-banner">
+  <div class="ai-banner-icon">{% if status_ok %}✅{% else %}⚠️{% endif %}</div>
+  <div>
+    <h3>Статус подключения</h3>
+    <p>{{ status_message }}</p>
+  </div>
+</div>
+
+{% if saved %}
+<div class="success-box">Ключи сохранены. Можно загружать записи и запускать анализ.</div>
+{% endif %}
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+  <h2>API-ключи</h2>
+  <p class="card-desc">
+    Вариант 1: <strong>OpenAI</strong> (всё в одном ключе).<br>
+    Вариант 2: <strong>Groq</strong> (транскрипция аудио) + <strong>DeepSeek</strong> (анализ текста).
+  </p>
+
+  <form method="post" action="/admin/settings" class="settings-form">
+    <label>
+      OpenAI API Key
+      <input type="password" name="openai_key" placeholder="sk-... (сейчас: {{ openai_masked }})" autocomplete="off">
+    </label>
+
+    <label>
+      Groq API Key
+      <input type="password" name="groq_key" placeholder="gsk_... (сейчас: {{ groq_masked }})" autocomplete="off">
+    </label>
+
+    <label>
+      DeepSeek API Key
+      <input type="password" name="deepseek_key" placeholder="sk-... (сейчас: {{ deepseek_masked }})" autocomplete="off">
+    </label>
+
+    <label class="checkbox-row">
+      <input type="checkbox" name="demo_mode" value="true" {% if demo_mode %}checked{% endif %}>
+      Демо-режим (без реального ИИ, только тест интерфейса)
+    </label>
+
+    <button type="submit" class="btn btn-primary">Сохранить ключи</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Где взять ключи</h2>
+  <ul class="simple-list">
+    <li><a href="https://platform.openai.com/api-keys" target="_blank">OpenAI API Keys</a></li>
+    <li><a href="https://console.groq.com/keys" target="_blank">Groq API Keys</a></li>
+    <li><a href="https://platform.deepseek.com/api_keys" target="_blank">DeepSeek API Keys</a></li>
+  </ul>
+</div>
+{% endblock %}

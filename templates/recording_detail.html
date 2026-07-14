@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}Анализ — {{ recording.filename }}{% endblock %}
+
+{% block content %}
+<a href="/dashboard" class="back-link">← Назад на главную</a>
+
+<div class="card">
+  <div class="detail-header">
+    <div>
+      <h1 class="page-title" style="font-size:1.3rem; margin-bottom:6px">{{ recording.filename }}</h1>
+      <p class="detail-meta">
+        {% if user.role.value == 'admin' %}👤 {{ owner.full_name }} · {% endif %}
+        {{ recording.uploaded_at.strftime('%d.%m.%Y %H:%M') }} ·
+        {{ '🎵 Аудио' if recording.file_type.value == 'audio' else '📝 Текст' }}
+        {% if duration and duration != '—' %} · ⏱ {{ duration }}{% endif %}
+      </p>
+      {% if can_download %}
+      <a href="/recording/{{ recording.id }}/download" class="btn btn-secondary btn-sm" style="margin-top:10px">⬇ Скачать запись</a>
+      {% endif %}
+    </div>
+    <span class="badge badge-{{ recording.status.value }}">
+      {% if recording.status.value == 'pending' %}Ожидает анализа
+      {% elif recording.status.value == 'processing' %}🤖 ИИ анализирует...
+      {% elif recording.status.value == 'done' %}✓ Анализ готов
+      {% else %}Ошибка{% endif %}
+    </span>
+  </div>
+
+  {% if recording.status.value == 'error' %}
+  <div class="error-box" style="margin-top:16px">
+    {{ recording.error_message }}
+    <form method="post" action="/recording/{{ recording.id }}/retry" style="margin-top:12px">
+      <button type="submit" class="btn btn-secondary">Повторить анализ</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if analysis %}
+<div class="ai-banner">
+  <div class="ai-banner-icon">🤖</div>
+  <div>
+    <h3>Результат ИИ-анализа</h3>
+    <p>{{ analysis.summary }}</p>
+  </div>
+</div>
+
+<div class="tabs" id="analysis-tabs">
+  <button class="tab-btn active" data-tab="overview">Обзор</button>
+  <button class="tab-btn" data-tab="errors">Ошибки</button>
+  <button class="tab-btn" data-tab="details">Детали</button>
+  {% if recording.transcript %}
+  <button class="tab-btn" data-tab="transcript">Транскрипт</button>
+  {% endif %}
+  <button class="tab-btn" data-tab="chat">💬 Спросить ИИ</button>
+</div>
+
+<div class="tab-panel active" data-panel="overview">
+  <div class="grid-2">
+    <div class="card">
+      <h2>Общая оценка</h2>
+      <div class="score-hero">
+        <div class="score-circle {% if analysis.total_score >= 70 %}score-high{% elif analysis.total_score >= 50 %}score-mid{% else %}score-low{% endif %}">
+          {{ analysis.total_score|int }}
+        </div>
+        <div>
+          <p style="color:var(--muted); font-size:0.9rem">из 100 баллов</p>
+          <p style="margin-top:8px; font-size:0.88rem; color:var(--muted)">
+            {% if analysis.total_score >= 70 %}Отличный разговор!{% elif analysis.total_score >= 50 %}Есть что улучшить{% else %}Нужна серьёзная работа{% endif %}
+          </p>
+        </div>
+      </div>
+
+      {% if analysis.sections %}
+      <h3 style="margin-top:20px">Разбор по блокам</h3>
+      <div class="grid-2" style="margin-top:12px; gap:12px">
+        {% set section_labels = {
+          'needs_discovery': 'Выявление потребностей',
+          'communication': 'Общение',
+          'objection_handling': 'Отработка возражений',
+          'outcome': 'Итог',
+          'next_step': 'Следующий шаг'
+        } %}
+        {% for key, label in section_labels.items() %}
+        {% if analysis.sections.get(key) %}
+        <div class="card" style="margin:0">
+          <h4 style="margin:0 0 8px">{{ label }}</h4>
+          <p style="margin:0; color:var(--muted); line-height:1.5">{{ analysis.sections.get(key) }}</p>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <h3 style="margin-top:20px">Оценки по критериям</h3>
+      <div class="scores-grid" style="margin-top:12px">
+        {% set labels = {
+          'needs_discovery': 'Выявление потребностей',
+          'communication': 'Общение',
+          'objection_handling': 'Отработка возражений',
+          'outcome': 'Итог',
+          'next_step': 'Следующий шаг',
+          'script_compliance': 'Соблюдение скрипта',
+          'argumentation': 'Аргументация',
+          'call_closing': 'Завершение'
+        } %}
+        {% for key, label in labels.items() %}
+        {% set val = analysis.scores.get(key, 0) %}
+        <div class="score-bar-item">
+          <div class="score-bar-label">
+            <span>{{ label }}</span>
+            <strong>{{ val|int }}</strong>
+          </div>
+          <div class="score-bar-track">
+            <div class="score-bar-fill" style="width: {{ val }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>💡 Рекомендации ИИ</h2>
+      {% if analysis.recommendations %}
+      <ul class="rec-list">
+        {% for rec in analysis.recommendations %}
+        <li>{{ rec }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p style="color:var(--muted)">Рекомендаций нет — отличная работа!</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="tab-panel" data-panel="errors">
+  <div class="card">
+    <h2>❌ Найденные ошибки</h2>
+    <p class="card-desc">ИИ объясняет что не так, почему это ошибка и как лучше ответить</p>
+    {% if analysis.errors.errors %}
+    {% for err in analysis.errors.errors %}
+    <div class="error-item">
+      <h4>{{ err.title }}</h4>
+      {% if err.quote %}
+      <div class="example-box" style="margin-bottom:10px">
+        <strong>Цитата из записи:</strong><br>«{{ err.quote }}»
+      </div>
+      {% endif %}
+      <p><strong>Что не так:</strong> {{ err.explanation }}</p>
+      <p><strong>Почему ошибка:</strong> {{ err.reason }}</p>
+      <p><strong>Как лучше:</strong> {{ err.better_response }}</p>
+      <div class="example-box">
+        <strong>✅ Пример правильной фразы:</strong><br>
+        «{{ err.example_phrase }}»
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--muted)">🎉 Критических ошибок не найдено</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="tab-panel" data-panel="details">
+  <div class="grid-2">
+    <div class="card">
+      <h3>Упущенные возможности</h3>
+      <div class="list-tags">
+        {% for item in analysis.errors.missed_opportunities or [] %}
+        <span class="tag">{{ item }}</span>
+        {% else %}<span style="color:var(--muted)">Нет</span>{% endfor %}
+      </div>
+    </div>
+    <div class="card">
+      <h3>Нарушения скрипта</h3>
+      <div class="list-tags">
+        {% for item in analysis.errors.script_violations or [] %}
+        <span class="tag">{{ item }}</span>
+        {% else %}<span style="color:var(--muted)">Нет</span>{% endfor %}
+      </div>
+    </div>
+    <div class="card">
+      <h3>Слабые места в общении</h3>
+      <div class="list-tags">
+        {% for item in analysis.errors.weak_communication or [] %}
+        <span class="tag">{{ item }}</span>
+        {% else %}<span style="color:var(--muted)">Нет</span>{% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if recording.transcript %}
+<div class="tab-panel" data-panel="transcript">
+  <div class="card">
+    <h2>📝 Транскрипт разговора</h2>
+    <p class="card-desc">Дословная расшифровка записи — только то, что реально сказано в разговоре</p>
+    <div class="transcript-box">{{ recording.transcript }}</div>
+  </div>
+</div>
+{% endif %}
+
+<div class="tab-panel" data-panel="chat">
+  <div class="card ai-chat-card" id="ai-chat" data-recording-id="{{ recording.id }}">
+    <h2>💬 ИИ-помощник</h2>
+    <p class="card-desc">Задайте вопрос по этому разговору — ИИ подскажет, как улучшить ответы и работу с клиентом</p>
+
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-msg chat-msg-ai">
+        <div class="chat-avatar">🤖</div>
+        <div class="chat-bubble">
+          Привет! Я изучил этот разговор. Спросите меня, например: «Как лучше отработать возражение о цене?» или «Что я упустил в начале разговора?»
+        </div>
+      </div>
+    </div>
+
+    <form class="chat-input-row" id="chat-form">
+      <input type="text" id="chat-question" placeholder="Ваш вопрос ИИ-помощнику..." maxlength="1000" autocomplete="off">
+      <button type="submit" class="btn btn-primary" id="chat-submit">Спросить</button>
+    </form>
+  </div>
+</div>
+
+{% elif recording.status.value in ['pending', 'processing'] %}
+<div class="card" id="processing-card" data-status="{{ recording.status.value }}">
+  <div class="processing-box">
+    <div class="processing-spinner"></div>
+    <h3>ИИ анализирует разговор...</h3>
+    <p style="color:var(--muted); margin-top:8px">Расшифровка аудио → поиск ошибок → рекомендации. Обычно 1–3 мин, длинные записи до 5 мин.</p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

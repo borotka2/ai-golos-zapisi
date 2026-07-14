@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ИИ Анализ разговоров{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Меню">☰</button>
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-icon">🎙️</div>
+        <div>
+          <h1>ИИ Анализ<br>разговоров</h1>
+          <p>Контроль качества</p>
+        </div>
+      </div>
+
+      <div class="user-panel">
+        {% if user.role.value == 'admin' %}
+        <div class="user-name">{{ user.full_name }}</div>
+        <span class="user-role role-admin">👑 Главный администратор</span>
+        {% else %}
+        <div class="user-name">{{ user.full_name }}</div>
+        <span class="user-role role-manager">👤 Менеджер</span>
+        {% endif %}
+      </div>
+
+      <nav class="side-nav">
+        <a href="/dashboard" class="side-link {% if request.url.path == '/dashboard' %}active{% endif %}">
+          🏠 Главная
+        </a>
+        {% if user.role.value == 'admin' %}
+        <a href="/admin/managers" class="side-link {% if '/admin/managers' in request.url.path %}active{% endif %}">
+          👥 Менеджеры
+          {% if pending_count is defined and pending_count > 0 %}
+          <span class="nav-badge">{{ pending_count }}</span>
+          {% endif %}
+        </a>
+        <a href="/admin/settings" class="side-link {% if '/admin/settings' in request.url.path %}active{% endif %}">
+          🔑 Настройки ИИ
+        </a>
+        {% endif %}
+        <a href="/logout" class="side-link" style="margin-top:auto">🚪 Выйти</a>
+      </nav>
+    </aside>
+
+    <div class="main-area">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

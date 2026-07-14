@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ manager.full_name }}{% endblock %}
+
+{% block content %}
+<a href="/admin/managers" class="back-link">← К списку менеджеров</a>
+
+<div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap">
+  <div>
+    <h1 class="page-title">{{ manager.full_name }}</h1>
+    <p class="page-subtitle">Логин: {{ manager.username }} · Записи и результаты ИИ-анализа</p>
+  </div>
+  <form method="post" action="/admin/managers/{{ manager.id }}/delete" onsubmit="return confirm('Удалить {{ manager.full_name }}? Все {{ stats.total }} записей и файлы будут удалены безвозвратно.')">
+    <button type="submit" class="btn btn-danger btn-sm">🗑 Удалить менеджера</button>
+  </form>
+</div>
+
+<div class="grid-4">
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.total }}</div>
+    <div class="stat-label">Записей</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.done }}</div>
+    <div class="stat-label">Проанализировано</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.avg_score }}</div>
+    <div class="stat-label">Средний балл</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.errors }}</div>
+    <div class="stat-label">С ошибками</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🎧 Записи менеджера</h2>
+  {% if recordings %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Файл</th>
+          <th>Тип</th>
+          <th>Дата</th>
+          <th>Статус</th>
+          <th>Балл</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recordings %}
+        <tr>
+          <td><strong>{{ r.filename }}</strong></td>
+          <td>{{ '🎵' if r.file_type.value == 'audio' else '📝' }}</td>
+          <td>{{ r.uploaded_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td><span class="badge badge-{{ r.status.value }}">
+            {% if r.status.value == 'done' %}Готово
+            {% elif r.status.value == 'processing' %}ИИ анализирует...
+            {% elif r.status.value == 'pending' %}Ожидает
+            {% else %}Ошибка{% endif %}
+          </span></td>
+          <td>{{ r.analysis.total_score|int if r.analysis else '—' }}</td>
+          <td>
+            <a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">Анализ</a>
+            <a href="/recording/{{ r.id }}/download" class="btn btn-ghost btn-sm">⬇ Скачать</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="icon">📭</div>
+    У менеджера пока нет загруженных записей
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

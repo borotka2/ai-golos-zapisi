@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Панель администратора{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Панель администратора</h1>
+  <p class="page-subtitle">Вы видите всех менеджеров и все записи. Менеджеры видят только свои.</p>
+</div>
+
+<div class="ai-banner">
+  <div class="ai-banner-icon">👑</div>
+  <div>
+    <h3>Главный администратор</h3>
+    <p>Контролируйте качество работы команды: смотрите записи каждого менеджера, баллы ИИ-анализа, ошибки и рекомендации.</p>
+  </div>
+</div>
+
+{% if pending_count > 0 %}
+<a href="/admin/managers" class="card card-highlight" style="text-decoration:none; color:inherit; display:block">
+  <strong>⏳ {{ pending_count }} заявок на регистрацию</strong>
+  <p class="card-desc" style="margin:6px 0 0">Нажмите, чтобы одобрить или отклонить →</p>
+</a>
+{% endif %}
+
+<div class="grid-4">
+  <div class="stat-card">
+    <div class="stat-value">{{ managers|length }}</div>
+    <div class="stat-label">Менеджеров</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ total_recordings }}</div>
+    <div class="stat-label">Всего записей</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ done_count }}</div>
+    <div class="stat-label">Проанализировано ИИ</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">100%</div>
+    <div class="stat-label">Доступ ко всем данным</div>
+  </div>
+</div>
+
+{% if managers %}
+<div class="card">
+  <h2>👥 Менеджеры команды</h2>
+  <p class="card-desc">Быстрый доступ к записям каждого менеджера</p>
+  {% for m in managers %}
+  <div class="manager-card">
+    <div>
+      <strong>{{ m.full_name }}</strong>
+      <div style="color:var(--muted); font-size:0.82rem">@{{ m.username }}</div>
+    </div>
+    <a href="/admin/manager/{{ m.id }}" class="btn btn-ghost btn-sm">Записи →</a>
+  </div>
+  {% endfor %}
+  <a href="/admin/managers" class="btn btn-secondary" style="margin-top:12px">Управление менеджерами</a>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>📋 Все записи разговоров</h2>
+  <p class="card-desc">Записи всех менеджеров с результатами ИИ-анализа</p>
+
+  {% if recordings %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Имя</th>
+          <th>Файл</th>
+          <th>Тип</th>
+          <th>Дата</th>
+          <th>Статус</th>
+          <th>Балл</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recordings %}
+        <tr>
+          <td><a href="/admin/manager/{{ r.owner.id }}"><strong>{{ r.owner.full_name }}</strong></a></td>
+          <td>{{ r.filename }}</td>
+          <td>{{ '🎵' if r.file_type.value == 'audio' else '📝' }}</td>
+          <td>{{ r.uploaded_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td><span class="badge badge-{{ r.status.value }}">
+            {% if r.status.value == 'pending' %}Ожидает
+            {% elif r.status.value == 'processing' %}ИИ анализирует...
+            {% elif r.status.value == 'done' %}Готово
+            {% else %}Ошибка{% endif %}
+          </span></td>
+          <td>
+            {% if r.analysis %}
+            <span class="score-circle sm {% if r.analysis.total_score >= 70 %}score-high{% elif r.analysis.total_score >= 50 %}score-mid{% else %}score-low{% endif %}">
+              {{ r.analysis.total_score|int }}
+            </span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">Анализ</a>
+            <a href="/recording/{{ r.id }}/download" class="btn btn-ghost btn-sm">⬇</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="icon">📭</div>
+    Записей пока нет — создайте менеджеров и они начнут загружать
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

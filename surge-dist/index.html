@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ИИ Анализ разговоров</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: #050810; color: #e8eef8; font-family: system-ui, sans-serif;
+      padding: 24px;
+    }
+    .card {
+      max-width: 480px; width: 100%; text-align: center;
+      background: #0d1424; border: 1px solid #243049; border-radius: 16px; padding: 32px;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.5rem; }
+    p { color: #8b9dc3; line-height: 1.5; }
+    .btn {
+      display: inline-block; margin-top: 20px; padding: 14px 28px;
+      background: #3b82f6; color: #fff; text-decoration: none; border-radius: 10px;
+      font-weight: 700; font-size: 1.05rem;
+    }
+    .btn.disabled { background: #334155; pointer-events: none; }
+    .links { margin-top: 20px; font-size: 0.9rem; display: flex; flex-direction: column; gap: 10px; }
+    .links a { color: #93c5fd; }
+    .hint { margin-top: 16px; font-size: 0.85rem; color: #64748b; }
+    .status { margin-top: 12px; font-size: 0.9rem; color: #94a3b8; }
+    .error { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎙️ ИИ Анализ разговоров</h1>
+    <p id="msg">Подключаемся к серверу…</p>
+    <a id="loginBtn" class="btn disabled" href="#">Войти (менеджер)</a>
+    <div class="links">
+      <a id="regLink" href="#">Регистрация менеджера</a>
+      <a id="adminLink" href="#">Вход для администратора</a>
+    </div>
+    <p class="hint">Постоянная ссылка: <b>edik-ai-golos.surge.sh</b><br>Менеджеры: свой логин. Админ: admin / admin123</p>
+    <p id="status" class="status"></p>
+  </div>
+  <script>
+    (function () {
+      var msg = document.getElementById("msg");
+      var status = document.getElementById("status");
+      var loginBtn = document.getElementById("loginBtn");
+      var regLink = document.getElementById("regLink");
+      var adminLink = document.getElementById("adminLink");
+      var attempt = 0;
+
+      function go(base, path) {
+        window.location.replace(base.replace(/\/$/, "") + path);
+      }
+
+      function setup(base) {
+        loginBtn.href = base + "/login";
+        regLink.href = base + "/register";
+        adminLink.href = base + "/static/autologin.html";
+        loginBtn.classList.remove("disabled");
+        msg.textContent = "Открываем страницу входа…";
+        go(base, "/login");
+      }
+
+      function tryConnect() {
+        attempt++;
+        status.textContent = "Попытка " + attempt + "…";
+        fetch("tunnel-url.json?_=" + Date.now(), { cache: "no-store" })
+          .then(function (r) { if (!r.ok) throw new Error("bad"); return r.json(); })
+          .then(function (data) {
+            if (!data || !data.url) throw new Error("no url");
+            var testUrl = data.url.replace(/\/$/, "") + "/login";
+            return fetch(testUrl, { method: "GET", mode: "no-cors", cache: "no-store" })
+              .then(function () { setup(data.url); })
+              .catch(function () { setup(data.url); });
+          })
+          .catch(function () {
+            msg.textContent = "Сервер перезапускается… Подождите, ссылка та же.";
+            status.innerHTML = '<span class="error">edik-ai-golos.surge.sh — авто-подключение каждые 3 сек</span>';
+            setTimeout(tryConnect, attempt < 40 ? 3000 : 10000);
+          });
+      }
+
+      tryConnect();
+    })();
+  </script>
+</body>
+</html>

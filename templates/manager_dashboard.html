@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Мой кабинет{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Привет, {{ user.full_name }}!</h1>
+  <p class="page-subtitle">Загружайте записи разговоров — ИИ проанализирует их и подскажет, что улучшить</p>
+</div>
+
+<div class="ai-banner">
+  <div class="ai-banner-icon">🤖</div>
+  <div>
+    <h3>ИИ-помощник анализирует ваши разговоры</h3>
+    <p>Загрузите аудио или текстовую расшифровку — ИИ автоматически проверит разговор и поможет улучшить навыки.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Что делает ИИ после загрузки</h2>
+  <div class="feature-grid">
+    <div class="feature-item"><span>🔍</span><div><strong>Находит ошибки</strong><p>С пояснениями и причинами</p></div></div>
+    <div class="feature-item"><span>💬</span><div><strong>Лучшие ответы</strong><p>Рекомендации и примеры фраз</p></div></div>
+    <div class="feature-item"><span>📋</span><div><strong>Проверяет скрипт</strong><p>Нарушения регламента</p></div></div>
+    <div class="feature-item"><span>📊</span><div><strong>Оценивает по 5 критериям</strong><p>Общий балл и резюме</p></div></div>
+    <div class="feature-item"><span>🎯</span><div><strong>Упущенные возможности</strong><p>Что можно было сделать лучше</p></div></div>
+    <div class="feature-item"><span>🤖</span><div><strong>Отвечает на вопросы</strong><p>Спросите ИИ в анализе разговора</p></div></div>
+  </div>
+</div>
+
+<div class="grid-4">
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.total }}</div>
+    <div class="stat-label">Всего записей</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.done }}</div>
+    <div class="stat-label">Проанализировано</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.pending }}</div>
+    <div class="stat-label">В обработке</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.avg_score }}</div>
+    <div class="stat-label">Средний балл</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>📁 Загрузить записи</h2>
+    <p class="card-desc">Можно загрузить <strong>много записей сразу</strong> — папки и файлы. Все уйдут в очередь, ИИ анализирует до 7 записей параллельно.</p>
+
+    {% if request.query_params.get('upload_error') %}
+    <div class="error-box">{{ request.query_params.get('upload_error') }}</div>
+    {% endif %}
+
+    <form id="upload-form">
+      <input type="file" id="file-input" multiple accept="audio/*,.mp3,.MP3,.wav,.m4a,.ogg,.flac,.aac,.txt,.md,.srt,.vtt" hidden>
+      <input type="file" id="folder-input" multiple webkitdirectory directory hidden>
+
+      <div class="upload-zone" id="upload-zone" title="Нажмите или перетащите mp3 файлы">
+        <div class="upload-icon">🎵</div>
+        <strong>Нажмите сюда или перетащите mp3 файлы</strong>
+        <div class="upload-hint" id="file-count">С рабочего стола, из папки — любые mp3, wav, txt</div>
+        <div class="upload-file-list" id="file-list"></div>
+      </div>
+
+      <div class="upload-btns">
+        <button type="button" class="btn btn-primary" id="btn-pick-files">📄 Добавить файлы</button>
+        <button type="button" class="btn btn-secondary" id="btn-pick-folder">📁 Добавить папку (0/7)</button>
+        <button type="button" class="btn btn-ghost" id="btn-clear-files" disabled>✕ Очистить</button>
+      </div>
+      <button type="submit" class="btn btn-primary btn-glow" id="btn-upload" style="margin-top:12px; width:100%" disabled>
+        Загрузить и запустить ИИ-анализ
+      </button>
+    </form>
+
+    <div class="auth-info-box" style="margin-top:14px">
+      <strong>Как загрузить много записей:</strong><br>
+      • «Добавить файлы» или «Добавить папку» — можно несколько папок подряд<br>
+      • Или перетащите mp3 на серую область<br>
+      • Одна кнопка «Загрузить» — все файлы в очереди, анализ идёт пачками параллельно
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>📈 Мой прогресс</h2>
+    {% if stats.history %}
+    <div class="progress-chart">
+      {% for item in stats.history[-10:] %}
+      <div class="progress-bar" style="height: {{ (item.score or 0) }}%;" title="{{ item.filename }}: {{ item.score }}">
+        <span>{{ item.score|int }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="card-desc" style="margin-top:8px; margin-bottom:0">
+      Баллы последних {{ stats.history[-10:]|length }} разговоров
+    </p>
+    {% else %}
+    <div class="empty-state">
+      <div class="icon">📊</div>
+      Загрузите первую запись — здесь появится график прогресса
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>🎧 История моих разговоров</h2>
+  <div class="privacy-note">
+    🔒 Вы видите <strong>только свои</strong> записи — чужие недоступны
+  </div>
+
+  {% if recordings %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Файл</th>
+          <th>Тип</th>
+          <th>Дата</th>
+          <th>Статус</th>
+          <th>Балл ИИ</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recordings %}
+        <tr>
+          <td><strong>{{ r.filename }}</strong></td>
+          <td>{{ '🎵 Аудио' if r.file_type.value == 'audio' else '📝 Текст' }}</td>
+          <td>{{ r.uploaded_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>
+            <span class="badge badge-{{ r.status.value }}">
+              {% if r.status.value == 'pending' %}Ожидает
+              {% elif r.status.value == 'processing' %}ИИ анализирует...
+              {% elif r.status.value == 'done' %}Готово
+              {% else %}Ошибка{% endif %}
+            </span>
+            {% if r.status.value == 'error' and r.error_message %}
+            <div style="font-size:0.75rem;color:var(--danger,#f87171);margin-top:4px;max-width:220px">{{ r.error_message[:120] }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.analysis %}
+            <span class="score-circle sm {% if r.analysis.total_score >= 70 %}score-high{% elif r.analysis.total_score >= 50 %}score-mid{% else %}score-low{% endif %}">
+              {{ r.analysis.total_score|int }}
+            </span>
+            {% else %}—{% endif %}
+          </td>
+          <td><a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">{% if r.status.value == 'error' %}Повторить{% else %}Открыть анализ{% endif %}</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="icon">🎙️</div>
+    Загрузите первую папку с записями разговоров
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "auth_base.html" %}
+{% block title %}Регистрация — ИИ Анализ{% endblock %}
+
+{% block auth_content %}
+<h2>Регистрация менеджера</h2>
+<p class="auth-sub">После регистрации администратор должен одобрить доступ</p>
+
+{% if success %}
+<div class="success-box">
+  <strong>✅ Заявка отправлена!</strong>
+  <p><strong>{{ full_name }}</strong>, ваш аккаунт создан. Администратор проверит заявку и откроет доступ — тогда сможете войти.</p>
+  <a href="/login" class="btn btn-secondary" style="margin-top:12px; width:100%">Перейти ко входу</a>
+</div>
+{% else %}
+
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/register" class="auth-form">
+  <div class="form-group">
+    <label>Ваше имя</label>
+    <input type="text" name="full_name" required minlength="2" maxlength="64" placeholder="Как вас зовут — Мария, Андрей, Саша...">
+    <small class="field-hint">Это имя увидит администратор, чтобы понять, кто регистрируется</small>
+  </div>
+  <div class="form-group">
+    <label>Логин</label>
+    <input type="text" name="username" required placeholder="ivanov" pattern="[a-zA-Z0-9_]{3,}" title="Латиница, цифры, _ — от 3 символов">
+  </div>
+  <div class="form-group">
+    <label>Пароль</label>
+    <input type="password" name="password" required minlength="6" placeholder="Минимум 6 символов">
+  </div>
+  <button type="submit" class="btn btn-primary btn-glow" style="width:100%">Зарегистрироваться</button>
+</form>
+
+<div class="auth-info-box">
+  🔒 После регистрации вы <strong>не сможете войти</strong>, пока главный администратор не одобрит вашу заявку.
+</div>
+{% endif %}
+
+<div class="auth-switch">
+  Уже есть аккаунт? <a href="/login">Войти</a>
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "auth_base.html" %}
+{% block title %}Вход — ИИ Анализ{% endblock %}
+
+{% block auth_content %}
+<h2>Вход в систему</h2>
+<p class="auth-sub">Администратор или одобренный менеджер</p>
+
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% endif %}
+
+{% if pending %}
+<div class="pending-box">
+  <strong>⏳ Ожидает одобрения</strong>
+  <p>Аккаунт <strong>{{ pending_name }}</strong> зарегистрирован, но администратор ещё не дал доступ. Попробуйте позже.</p>
+</div>
+{% endif %}
+
+<form method="post" action="/login" class="auth-form">
+  <div class="form-group">
+    <label>Логин</label>
+    <input type="text" name="username" required autofocus placeholder="your_login">
+  </div>
+  <div class="form-group">
+    <label>Пароль</label>
+    <input type="password" name="password" required placeholder="••••••••">
+  </div>
+  <button type="submit" class="btn btn-primary btn-glow" style="width:100%">Войти</button>
+</form>
+
+<div class="auth-switch">
+  Нет аккаунта? <a href="/register">Зарегистрироваться как менеджер</a>
+</div>
+
+<div class="auth-hint">
+  <span class="auth-hint-label">Админ</span> admin / admin123
+</div>
+{% endblock %}
