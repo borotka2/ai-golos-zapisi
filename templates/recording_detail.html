@@ -10,8 +10,15 @@
       <h1 class="page-title" style="font-size:1.3rem; margin-bottom:6px">{{ recording.filename }}</h1>
       <p class="detail-meta">
         {% if user.role.value == 'admin' %}👤 {{ owner.full_name }} · {% endif %}
-        {{ recording.uploaded_at.strftime('%d.%m.%Y %H:%M') }} ·
+        {% if recording.recorded_at %}
+          📞 {{ recording.recorded_at.strftime('%d.%m.%Y %H:%M') }}
+        {% else %}
+          {{ recording.uploaded_at.strftime('%d.%m.%Y %H:%M') }}
+        {% endif %}
+        ·
+        {% if recording.source == 'microsip' %}MicroSIP · {% endif %}
         {{ '🎵 Аудио' if recording.file_type.value == 'audio' else '📝 Текст' }}
+        {% if recording.phone %} · ☎ {{ recording.phone }}{% endif %}
         {% if duration and duration != '—' %} · ⏱ {{ duration }}{% endif %}
       </p>
       {% if can_download %}
@@ -25,6 +32,19 @@
       {% else %}Ошибка{% endif %}
     </span>
   </div>
+
+  {% if recording.status.value == 'pending' and not analysis %}
+  <div class="ai-banner" style="margin-top:16px">
+    <div class="ai-banner-icon">🤖</div>
+    <div>
+      <h3>Запись готова к анализу</h3>
+      <p>Файл уже на сайте{% if recording.source == 'microsip' %} (из MicroSIP){% endif %}. Нажмите кнопку — ИИ расшифрует и разберёт разговор.</p>
+      <form method="post" action="/recording/{{ recording.id }}/analyze" style="margin-top:12px">
+        <button type="submit" class="btn btn-primary btn-glow">🤖 Запустить анализ ИИ</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
 
   {% if recording.status.value == 'error' %}
   <div class="error-box" style="margin-top:16px">
