@@ -36,19 +36,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (fileCount) {
       if (!total) {
-        fileCount.textContent = "Добавьте до 7 папок подряд или выберите файлы mp3, wav, txt";
+        fileCount.textContent = "Папка ещё не выбрана — нажмите «Выбрать папку MicroSIP»";
       } else {
-        const folderPart = foldersAdded ? ` · папок: ${foldersAdded}/${MAX_FOLDERS}` : "";
-        fileCount.textContent = `Готово к загрузке: ${total} файл(ов)${folderPart}`;
+        const folderPart = foldersAdded ? ` · из папки MicroSIP` : "";
+        fileCount.textContent = `Выбрано: ${total} файл(ов)${folderPart} — загрузятся на сайт, анализ кнопкой`;
       }
+    }
+    if (btnUpload && total) {
+      btnUpload.textContent = `Загрузить ${total} на сайт (анализ потом)`;
+    } else if (btnUpload) {
+      btnUpload.textContent = "Загрузить выбранное на сайт";
     }
 
     if (fileList) {
       if (total && total <= 10) {
-        fileList.innerHTML = ok.map((f) => `<span class="upload-tag">${f.name}</span>`).join("");
+        fileList.innerHTML = ok.map((f) => `<span class=\"upload-tag\">${f.name}</span>`).join("");
       } else if (total > 10) {
-        fileList.innerHTML = ok.slice(0, 6).map((f) => `<span class="upload-tag">${f.name}</span>`).join("")
-          + `<span class="upload-tag">+ ещё ${total - 6} файлов</span>`;
+        fileList.innerHTML = ok.slice(0, 6).map((f) => `<span class=\"upload-tag\">${f.name}</span>`).join("")
+          + `<span class=\"upload-tag\">+ ещё ${total - 6} файлов</span>`;
       } else {
         fileList.innerHTML = "";
       }
@@ -63,6 +68,9 @@ document.addEventListener("DOMContentLoaded", () => {
         : `📁 Добавить папку (${foldersAdded}/${MAX_FOLDERS})`;
     }
   }
+
+  // Папка MicroSIP → на сайт, анализ потом кнопкой (не сразу)
+  let uploadSource = "upload";
 
   function appendFiles(fileListRaw, sourceLabel) {
     const all = Array.from(fileListRaw || []);
@@ -79,6 +87,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       foldersAdded += 1;
+      uploadSource = "microsip";
     }
 
     const existing = new Set(selectedFiles.map(fileKey));
@@ -103,6 +112,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     refreshFileUI();
+
+    // После выбора папки MicroSIP — сразу грузим на сайт (анализ вручную)
+    if (sourceLabel === "из папки" && added > 0 && uploadForm) {
+      setTimeout(() => uploadForm.requestSubmit(), 80);
+    }
   }
 
   function clearFiles() {
@@ -227,10 +241,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const fd = new FormData();
       selectedFiles.forEach((f) => fd.append("files", f, f.name));
+      // Папка MicroSIP: только на сайт, без авто-анализа
+      fd.append("auto_analyze", "false");
+      fd.append("source", uploadSource === "microsip" ? "microsip" : "upload");
 
       if (btnUpload) {
         btnUpload.disabled = true;
-        btnUpload.textContent = `Загрузка ${selectedFiles.length} файлов и запуск ИИ...`;
+        btnUpload.textContent = `Загрузка ${selectedFiles.length} файлов на сайт...`;
       }
 
       try {
@@ -322,7 +339,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function appendMessage(role, text, isTyping = false) {
       const msg = document.createElement("div");
       msg.className = `chat-msg chat-msg-${role}${isTyping ? " chat-typing" : ""}`;
-      msg.innerHTML = `<div class="chat-avatar">${role === "ai" ? "🤖" : "👤"}</div><div class="chat-bubble">${text}</div>`;
+      msg.innerHTML = `<div class=\"chat-avatar\">${role === "ai" ? "🤖" : "👤"}</div><div class=\"chat-bubble\">${text}</div>`;
       chatMessages.appendChild(msg);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return msg;
