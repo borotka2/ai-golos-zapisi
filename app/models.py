@@ -33,6 +33,8 @@ class User(Base):
     full_name = Column(String(128), nullable=False)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.manager)
     is_approved = Column(Boolean, nullable=False, default=False)
+    # Токен для автозагрузки записей с ПК менеджера (MicroSIP watcher)
+    ingest_token = Column(String(64), unique=True, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     recordings = relationship("Recording", back_populates="owner", cascade="all, delete-orphan")
@@ -50,6 +52,13 @@ class Recording(Base):
     transcript = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
+    # upload = ручная загрузка в браузере; microsip = авто из папки MicroSIP
+    source = Column(String(32), nullable=False, default="upload")
+    # Время звонка (из имени файла MicroSIP или mtime файла)
+    recorded_at = Column(DateTime, nullable=True)
+    phone = Column(String(64), nullable=True)
+    # sha256 содержимого — чтобы не дублировать одну и ту же запись
+    content_hash = Column(String(64), nullable=True, index=True)
 
     owner = relationship("User", back_populates="recordings")
     analysis = relationship("Analysis", back_populates="recording", uselist=False, cascade="all, delete-orphan")
