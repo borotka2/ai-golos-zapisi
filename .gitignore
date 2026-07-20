@@ -19,3 +19,5 @@ server-*.err
 srv-*.log
 srv-*.err
 live.err
+tools/microsip_config.json
+tools/microsip_state.json

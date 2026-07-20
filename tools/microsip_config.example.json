@@ -1,0 +1,8 @@
+{
+  "server_url": "http://127.0.0.1:8002",
+  "ingest_token": "ВСТАВЬТЕ_ТОКЕН_ИЗ_КАБИНЕТА_МЕНЕДЖЕРА",
+  "watch_folder": "C:\\MicroSIP\\Recordings",
+  "poll_seconds": 15,
+  "auto_analyze": false,
+  "stable_seconds": 3
+}
