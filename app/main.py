@@ -29,6 +29,7 @@ from .auth import (
     require_admin,
 )
 from .database import UPLOADS_DIR, Base, engine, get_db
+from .microsip import display_when, file_sha256, parse_phone, parse_recorded_at
 from .recording_files import format_duration, get_audio_duration_seconds
 from .models import Analysis, FileType, Recording, RecordingStatus, User, UserRole
 
@@ -80,10 +81,22 @@ templates = Jinja2Templates(env=_jinja_env, context_processors=[template_context
 
 def migrate_db():
     with engine.begin() as conn:
-        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
-        if "is_approved" not in cols:
+        user_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+        if "is_approved" not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN is_approved INTEGER NOT NULL DEFAULT 1"))
+        if "ingest_token" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN ingest_token VARCHAR(64)"))
         conn.execute(text("UPDATE users SET is_approved = 1 WHERE role = 'admin' OR is_approved IS NULL"))
+
+        rec_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(recordings)")).fetchall()}
+        if "source" not in rec_cols:
+            conn.execute(text("ALTER TABLE recordings ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT 'upload'"))
+        if "recorded_at" not in rec_cols:
+            conn.execute(text("ALTER TABLE recordings ADD COLUMN recorded_at DATETIME"))
+        if "phone" not in rec_cols:
+            conn.execute(text("ALTER TABLE recordings ADD COLUMN phone VARCHAR(64)"))
+        if "content_hash" not in rec_cols:
+            conn.execute(text("ALTER TABLE recordings ADD COLUMN content_hash VARCHAR(64)"))
 
 
 def init_db():
@@ -111,14 +124,17 @@ def init_db():
 
 
 def recover_stuck_analyses():
-    """После перезапуска сервера потоки анализа умирают — перезапускаем зависшие записи."""
+    """После перезапуска — только зависшие mid-analysis (processing).
+
+    pending не трогаем: менеджер сам жмёт «Анализ ИИ».
+    """
     from .database import SessionLocal
 
     db = SessionLocal()
     try:
         stuck = (
             db.query(Recording)
-            .filter(Recording.status.in_((RecordingStatus.processing, RecordingStatus.pending)))
+            .filter(Recording.status == RecordingStatus.processing)
             .all()
         )
         for recording in stuck:
@@ -127,7 +143,7 @@ def recover_stuck_analyses():
             db.commit()
             schedule_analysis(recording.id)
         if stuck:
-            print(f"[startup] Перезапущен анализ для {len(stuck)} записей")
+            print(f"[startup] Перезапущен анализ для {len(stuck)} зависших записей")
     finally:
         db.close()
 
@@ -483,6 +499,13 @@ def dashboard(request: Request, user: User = Depends(get_current_user), db: Sess
         .order_by(Recording.uploaded_at.desc())
         .all()
     )
+    # Свежие звонки сверху: время звонка (MicroSIP), иначе время загрузки
+    recordings.sort(
+        key=lambda r: r.recorded_at or r.uploaded_at or datetime.min,
+        reverse=True,
+    )
+    ingest_token = _ensure_ingest_token(user, db)
+    base = str(request.base_url).rstrip("/")
     return templates.TemplateResponse(
         request,
         "manager_dashboard.html",
@@ -490,6 +513,12 @@ def dashboard(request: Request, user: User = Depends(get_current_user), db: Sess
             "user": user,
             "recordings": recordings,
             "stats": manager_stats(db, user.id),
+            "microsip": {
+                "token": ingest_token,
+                "server_url": base,
+                "ingest_url": f"{base}/api/microsip/ingest",
+                "folder_hint": r"C:\MicroSIP\Recordings",
+            },
         },
     )
 
@@ -498,11 +527,21 @@ def dashboard(request: Request, user: User = Depends(get_current_user), db: Sess
 async def upload_files(
     request: Request,
     files: list[UploadFile] = File(...),
+    auto_analyze: str = Form("false"),
+    source: str = Form("upload"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="Файлы не выбраны")
+
+    # Папка MicroSIP: грузим на сайт, анализ — кнопкой «Анализ ИИ»
+    do_analyze = str(auto_analyze).lower() in ("1", "true", "yes", "on")
+    src = (source or "upload").strip().lower()
+    if src not in ("upload", "microsip", "folder"):
+        src = "upload"
+    if src == "folder":
+        src = "microsip"
 
     user_dir = UPLOADS_DIR / str(user.id) / datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -511,7 +550,7 @@ async def upload_files(
     skipped = 0
     queued_ids: list[int] = []
 
-    # Сначала сохраняем все файлы, потом ставим в очередь анализа — много записей за раз
+    # Сначала сохраняем все файлы; анализ — только если auto_analyze=true
     for upload in files:
         if not upload.filename:
             skipped += 1
@@ -540,6 +579,9 @@ async def upload_files(
             stored_path=str(dest),
             file_type=FileType.audio if file_type == "audio" else FileType.text,
             status=RecordingStatus.pending,
+            source=src,
+            recorded_at=parse_recorded_at(safe_name, dest.stat().st_mtime),
+            phone=parse_phone(safe_name),
         )
         db.add(recording)
         db.flush()
@@ -548,8 +590,9 @@ async def upload_files(
 
     if saved:
         db.commit()
-        for rid in queued_ids:
-            schedule_analysis(rid)
+        if do_analyze:
+            for rid in queued_ids:
+                schedule_analysis(rid)
     else:
         db.rollback()
 
@@ -731,6 +774,203 @@ def retry_analysis(
     db.commit()
     schedule_analysis(recording.id)
     return RedirectResponse(f"/recording/{recording_id}", status_code=302)
+
+
+@app.post("/recording/{recording_id}/analyze")
+def start_analysis(
+    recording_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Ручной запуск ИИ-анализа (для записей из MicroSIP и повторных)."""
+    recording = db.query(Recording).filter(Recording.id == recording_id).first()
+    if not recording or not can_access_recording(user, recording.user_id):
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+
+    if recording.status == RecordingStatus.processing:
+        raise HTTPException(status_code=409, detail="Анализ уже идёт")
+    if recording.status == RecordingStatus.done and recording.analysis:
+        if "application/json" in (request.headers.get("accept") or ""):
+            return JSONResponse({"ok": True, "status": "done", "redirect": f"/recording/{recording_id}"})
+        return RedirectResponse(f"/recording/{recording_id}", status_code=302)
+
+    recording.status = RecordingStatus.pending
+    recording.error_message = None
+    db.commit()
+    schedule_analysis(recording.id)
+
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse({"ok": True, "status": "pending", "redirect": f"/recording/{recording_id}"})
+    return RedirectResponse(f"/recording/{recording_id}", status_code=302)
+
+
+def _ensure_ingest_token(user: User, db: Session) -> str:
+    if user.ingest_token:
+        return user.ingest_token
+    user.ingest_token = uuid.uuid4().hex + uuid.uuid4().hex[:16]
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user.ingest_token
+
+
+def _user_by_ingest_token(db: Session, token: str | None) -> User:
+    token = (token or "").strip()
+    if not token or len(token) < 16:
+        raise HTTPException(status_code=401, detail="Нужен X-Ingest-Token менеджера")
+    user = db.query(User).filter(User.ingest_token == token).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Неверный токен")
+    if user.role == UserRole.manager and not user.is_approved:
+        raise HTTPException(status_code=403, detail="Аккаунт менеджера ещё не одобрен")
+    return user
+
+
+@app.get("/api/microsip/setup")
+def microsip_setup(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Токен и URL для watcher на ПК менеджера."""
+    if user.role == UserRole.admin:
+        raise HTTPException(status_code=400, detail="Токен MicroSIP выдаётся менеджеру, не админу")
+    token = _ensure_ingest_token(user, db)
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({
+        "ok": True,
+        "username": user.username,
+        "full_name": user.full_name,
+        "ingest_token": token,
+        "server_url": base,
+        "ingest_url": f"{base}/api/microsip/ingest",
+        "folder_hint": r"C:\MicroSIP\Recordings",
+        "auto_analyze_default": False,
+        "instruction": (
+            "1) В MicroSIP: Settings → Recording → папка Recordings. "
+            "2) На ПК менеджера запустите microsip_watcher с этим токеном. "
+            "3) Новые записи появятся в кабинете с датой/временем. "
+            "4) Нажмите «Анализ ИИ» вручную."
+        ),
+    })
+
+
+@app.post("/api/microsip/token/regenerate")
+def microsip_token_regenerate(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role == UserRole.admin:
+        raise HTTPException(status_code=400, detail="Только для менеджера")
+    user.ingest_token = uuid.uuid4().hex + uuid.uuid4().hex[:16]
+    db.commit()
+    return JSONResponse({"ok": True, "ingest_token": user.ingest_token})
+
+
+@app.post("/api/microsip/ingest")
+async def microsip_ingest(
+    request: Request,
+    file: UploadFile = File(...),
+    auto_analyze: bool = Form(False),
+    recorded_at: str | None = Form(None),
+    phone: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Автозагрузка файла из папки MicroSIP (без логина в браузере).
+
+    Auth: заголовок X-Ingest-Token (из /api/microsip/setup).
+    По умолчанию анализ НЕ запускается — менеджер жмёт кнопку в кабинете.
+    """
+    token = request.headers.get("X-Ingest-Token") or request.headers.get("X-API-Token")
+    user = _user_by_ingest_token(db, token)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Пустое имя файла")
+
+    file_type = detect_file_type(file.filename, file.content_type or "")
+    if file_type == "unknown":
+        raise HTTPException(status_code=400, detail="Нужен аудиофайл: mp3, wav, m4a, ogg…")
+
+    safe_name = Path(file.filename.replace("\\", "/")).name
+    user_dir = UPLOADS_DIR / str(user.id) / "microsip" / datetime.utcnow().strftime("%Y%m%d")
+    user_dir.mkdir(parents=True, exist_ok=True)
+    dest = user_dir / f"{uuid.uuid4().hex}_{safe_name}"
+
+    try:
+        with dest.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить: {exc}") from exc
+
+    if dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Файл пустой")
+
+    content_hash = file_sha256(dest)
+    existing = (
+        db.query(Recording)
+        .filter(Recording.user_id == user.id, Recording.content_hash == content_hash)
+        .first()
+    )
+    if existing:
+        dest.unlink(missing_ok=True)
+        return JSONResponse({
+            "ok": True,
+            "duplicate": True,
+            "recording_id": existing.id,
+            "filename": existing.filename,
+            "status": existing.status.value,
+            "recorded_at": display_when(existing.recorded_at, existing.uploaded_at),
+        })
+
+    parsed_dt = None
+    if recorded_at:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M"):
+            try:
+                parsed_dt = datetime.strptime(recorded_at.strip(), fmt)
+                break
+            except ValueError:
+                continue
+    if parsed_dt is None:
+        parsed_dt = parse_recorded_at(safe_name, dest.stat().st_mtime)
+
+    rec_phone = (phone or "").strip() or parse_phone(safe_name)
+
+    recording = Recording(
+        user_id=user.id,
+        filename=safe_name,
+        stored_path=str(dest),
+        file_type=FileType.audio if file_type == "audio" else FileType.text,
+        status=RecordingStatus.pending,
+        source="microsip",
+        recorded_at=parsed_dt,
+        phone=rec_phone,
+        content_hash=content_hash,
+    )
+    db.add(recording)
+    db.commit()
+    db.refresh(recording)
+
+    if auto_analyze:
+        schedule_analysis(recording.id)
+
+    return JSONResponse({
+        "ok": True,
+        "duplicate": False,
+        "recording_id": recording.id,
+        "filename": recording.filename,
+        "status": recording.status.value,
+        "source": "microsip",
+        "auto_analyze": auto_analyze,
+        "recorded_at": display_when(recording.recorded_at, recording.uploaded_at),
+        "phone": recording.phone,
+        "message": (
+            "Запись в кабинете. Нажмите «Анализ ИИ»."
+            if not auto_analyze
+            else "Запись загружена, ИИ-анализ в очереди."
+        ),
+    })
 
 
 @app.get("/admin/settings", response_class=HTMLResponse)

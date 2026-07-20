@@ -969,3 +969,52 @@ tr:last-child td { border-bottom: none; }
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* MicroSIP: большая иконка выбора папки */
+.ms-pick-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 720px) {
+  .ms-pick-row { grid-template-columns: 1fr; }
+}
+.ms-folder-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 140px;
+  padding: 20px 16px;
+  border: 2px dashed var(--border);
+  border-radius: 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, transform .12s;
+  font: inherit;
+  text-align: center;
+}
+.ms-folder-btn:hover {
+  border-color: #60a5fa;
+  background: rgba(59, 130, 246, 0.08);
+  transform: translateY(-1px);
+}
+.ms-folder-btn-alt {
+  min-height: 140px;
+  opacity: 0.95;
+}
+.ms-folder-icon {
+  font-size: 2.6rem;
+  line-height: 1;
+}
+.ms-folder-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+.ms-folder-sub {
+  font-size: 0.82rem;
+  color: var(--muted);
+  max-width: 220px;
+}

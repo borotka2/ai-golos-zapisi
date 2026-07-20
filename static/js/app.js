@@ -50,10 +50,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (fileList) {
       if (total && total <= 10) {
-        fileList.innerHTML = ok.map((f) => `<span class=\"upload-tag\">${f.name}</span>`).join("");
+        fileList.innerHTML = ok.map((f) => `<span class="upload-tag">${f.name}</span>`).join("");
       } else if (total > 10) {
-        fileList.innerHTML = ok.slice(0, 6).map((f) => `<span class=\"upload-tag\">${f.name}</span>`).join("")
-          + `<span class=\"upload-tag\">+ ещё ${total - 6} файлов</span>`;
+        fileList.innerHTML = ok.slice(0, 6).map((f) => `<span class="upload-tag">${f.name}</span>`).join("")
+          + `<span class="upload-tag">+ ещё ${total - 6} файлов</span>`;
       } else {
         fileList.innerHTML = "";
       }
@@ -339,7 +339,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function appendMessage(role, text, isTyping = false) {
       const msg = document.createElement("div");
       msg.className = `chat-msg chat-msg-${role}${isTyping ? " chat-typing" : ""}`;
-      msg.innerHTML = `<div class=\"chat-avatar\">${role === "ai" ? "🤖" : "👤"}</div><div class=\"chat-bubble\">${text}</div>`;
+      msg.innerHTML = `<div class="chat-avatar">${role === "ai" ? "🤖" : "👤"}</div><div class="chat-bubble">${text}</div>`;
       chatMessages.appendChild(msg);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return msg;
