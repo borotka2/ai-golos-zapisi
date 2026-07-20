@@ -4,27 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1 class="page-title">Привет, {{ user.full_name }}!</h1>
-  <p class="page-subtitle">Загружайте записи разговоров — ИИ проанализирует их и подскажет, что улучшить</p>
-</div>
-
-<div class="ai-banner">
-  <div class="ai-banner-icon">🤖</div>
-  <div>
-    <h3>ИИ-помощник анализирует ваши разговоры</h3>
-    <p>Загрузите аудио или текстовую расшифровку — ИИ автоматически проверит разговор и поможет улучшить навыки.</p>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Что делает ИИ после загрузки</h2>
-  <div class="feature-grid">
-    <div class="feature-item"><span>🔍</span><div><strong>Находит ошибки</strong><p>С пояснениями и причинами</p></div></div>
-    <div class="feature-item"><span>💬</span><div><strong>Лучшие ответы</strong><p>Рекомендации и примеры фраз</p></div></div>
-    <div class="feature-item"><span>📋</span><div><strong>Проверяет скрипт</strong><p>Нарушения регламента</p></div></div>
-    <div class="feature-item"><span>📊</span><div><strong>Оценивает по 5 критериям</strong><p>Общий балл и резюме</p></div></div>
-    <div class="feature-item"><span>🎯</span><div><strong>Упущенные возможности</strong><p>Что можно было сделать лучше</p></div></div>
-    <div class="feature-item"><span>🤖</span><div><strong>Отвечает на вопросы</strong><p>Спросите ИИ в анализе разговора</p></div></div>
-  </div>
+  <p class="page-subtitle">Выберите папку с записями MicroSIP → загрузите → нажмите «Анализ ИИ»</p>
 </div>
 
 <div class="grid-4">
@@ -46,44 +26,57 @@
   </div>
 </div>
 
-<div class="grid-2">
-  <div class="card">
-    <h2>📁 Загрузить записи</h2>
-    <p class="card-desc">Можно загрузить <strong>много записей сразу</strong> — папки и файлы. Все уйдут в очередь, ИИ анализирует до 7 записей параллельно.</p>
+{# ===== Главное действие для менеджеров: иконка → выбор папки ===== #}
+<div class="card" id="upload-card">
+  <h2>📞 Записи из MicroSIP</h2>
+  <p class="card-desc">
+    Один раз нажмите иконку → в окне Windows выберите папку, куда MicroSIP сохраняет звонки
+    (часто <code>{{ microsip.folder_hint }}</code>). Все wav/mp3 из неё попадут в список ниже.
+  </p>
 
-    {% if request.query_params.get('upload_error') %}
-    <div class="error-box">{{ request.query_params.get('upload_error') }}</div>
-    {% endif %}
+  {% if request.query_params.get('upload_error') %}
+  <div class="error-box">{{ request.query_params.get('upload_error') }}</div>
+  {% endif %}
 
-    <form id="upload-form">
-      <input type="file" id="file-input" multiple accept="audio/*,.mp3,.MP3,.wav,.m4a,.ogg,.flac,.aac,.txt,.md,.srt,.vtt" hidden>
-      <input type="file" id="folder-input" multiple webkitdirectory directory hidden>
+  <form id="upload-form">
+    <input type="file" id="file-input" multiple accept="audio/*,.mp3,.MP3,.wav,.m4a,.ogg,.flac,.aac,.txt,.md,.srt,.vtt" hidden>
+    <input type="file" id="folder-input" multiple webkitdirectory directory hidden>
 
-      <div class="upload-zone" id="upload-zone" title="Нажмите или перетащите mp3 файлы">
-        <div class="upload-icon">🎵</div>
-        <strong>Нажмите сюда или перетащите mp3 файлы</strong>
-        <div class="upload-hint" id="file-count">С рабочего стола, из папки — любые mp3, wav, txt</div>
-        <div class="upload-file-list" id="file-list"></div>
-      </div>
-
-      <div class="upload-btns">
-        <button type="button" class="btn btn-primary" id="btn-pick-files">📄 Добавить файлы</button>
-        <button type="button" class="btn btn-secondary" id="btn-pick-folder">📁 Добавить папку (0/7)</button>
-        <button type="button" class="btn btn-ghost" id="btn-clear-files" disabled>✕ Очистить</button>
-      </div>
-      <button type="submit" class="btn btn-primary btn-glow" id="btn-upload" style="margin-top:12px; width:100%" disabled>
-        Загрузить и запустить ИИ-анализ
+    <div class="ms-pick-row">
+      <button type="button" class="ms-folder-btn" id="btn-pick-folder" title="Выбрать папку с записями MicroSIP">
+        <span class="ms-folder-icon">📁</span>
+        <span class="ms-folder-title">Выбрать папку MicroSIP</span>
+        <span class="ms-folder-sub">Нажмите → укажите папку Recordings</span>
       </button>
-    </form>
-
-    <div class="auth-info-box" style="margin-top:14px">
-      <strong>Как загрузить много записей:</strong><br>
-      • «Добавить файлы» или «Добавить папку» — можно несколько папок подряд<br>
-      • Или перетащите mp3 на серую область<br>
-      • Одна кнопка «Загрузить» — все файлы в очереди, анализ идёт пачками параллельно
+      <button type="button" class="ms-folder-btn ms-folder-btn-alt" id="btn-pick-files" title="Выбрать отдельные файлы">
+        <span class="ms-folder-icon">🎵</span>
+        <span class="ms-folder-title">Или файлы</span>
+        <span class="ms-folder-sub">mp3 / wav по одному</span>
+      </button>
     </div>
-  </div>
 
+    <div class="upload-zone" id="upload-zone" style="margin-top:14px" title="Можно перетащить файлы сюда">
+      <div class="upload-hint" id="file-count">Папка ещё не выбрана</div>
+      <div class="upload-file-list" id="file-list"></div>
+    </div>
+
+    <div class="upload-btns" style="margin-top:10px">
+      <button type="button" class="btn btn-ghost" id="btn-clear-files" disabled>✕ Очистить</button>
+    </div>
+    <button type="submit" class="btn btn-primary btn-glow" id="btn-upload" style="margin-top:12px; width:100%" disabled>
+      Загрузить выбранное на сайт
+    </button>
+  </form>
+
+  <div class="auth-info-box" style="margin-top:14px">
+    <strong>Как объяснить менеджеру (3 шага):</strong><br>
+    1) 📁 <strong>Выбрать папку MicroSIP</strong> — ту, куда пишет запись<br>
+    2) <strong>Загрузить</strong> — файлы появятся в таблице с датой и временем<br>
+    3) Кнопка <strong>🤖 Анализ ИИ</strong> у нужного звонка
+  </div>
+</div>
+
+<div class="grid-2">
   <div class="card">
     <h2>📈 Мой прогресс</h2>
     {% if stats.history %}
@@ -100,16 +93,25 @@
     {% else %}
     <div class="empty-state">
       <div class="icon">📊</div>
-      Загрузите первую запись — здесь появится график прогресса
+      После анализов здесь будет график баллов
     </div>
     {% endif %}
+  </div>
+  <div class="card">
+    <h2>🤖 Что делает ИИ</h2>
+    <div class="feature-grid" style="grid-template-columns:1fr 1fr">
+      <div class="feature-item"><span>🔍</span><div><strong>Ошибки</strong><p>С пояснениями</p></div></div>
+      <div class="feature-item"><span>💬</span><div><strong>Фразы</strong><p>Лучшие ответы</p></div></div>
+      <div class="feature-item"><span>📋</span><div><strong>Скрипт</strong><p>Регламент</p></div></div>
+      <div class="feature-item"><span>📊</span><div><strong>Балл</strong><p>из 100</p></div></div>
+    </div>
   </div>
 </div>
 
 <div class="card">
   <h2>🎧 История моих разговоров</h2>
   <div class="privacy-note">
-    🔒 Вы видите <strong>только свои</strong> записи — чужие недоступны
+    🔒 Вы видите <strong>только свои</strong> записи — чужие недоступны · дата = время звонка (или загрузки)
   </div>
 
   {% if recordings %}
@@ -118,8 +120,9 @@
       <thead>
         <tr>
           <th>Файл</th>
-          <th>Тип</th>
-          <th>Дата</th>
+          <th>Откуда</th>
+          <th>Дата и время</th>
+          <th>Телефон</th>
           <th>Статус</th>
           <th>Балл ИИ</th>
           <th></th>
@@ -129,11 +132,25 @@
         {% for r in recordings %}
         <tr>
           <td><strong>{{ r.filename }}</strong></td>
-          <td>{{ '🎵 Аудио' if r.file_type.value == 'audio' else '📝 Текст' }}</td>
-          <td>{{ r.uploaded_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>
+            {% if r.source == 'microsip' %}
+            <span class="badge badge-pending" title="Из папки MicroSIP">📞 MicroSIP</span>
+            {% else %}
+            <span class="badge" style="opacity:.8">📁 Загрузка</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.recorded_at %}
+              {{ r.recorded_at.strftime('%d.%m.%Y %H:%M') }}
+            {% else %}
+              {{ r.uploaded_at.strftime('%d.%m.%Y %H:%M') }}
+            {% endif %}
+          </td>
+          <td>{{ r.phone or '—' }}</td>
           <td>
             <span class="badge badge-{{ r.status.value }}">
-              {% if r.status.value == 'pending' %}Ожидает
+              {% if r.status.value == 'pending' and r.source == 'microsip' and not r.analysis %}Ждёт анализа
+              {% elif r.status.value == 'pending' %}Ожидает
               {% elif r.status.value == 'processing' %}ИИ анализирует...
               {% elif r.status.value == 'done' %}Готово
               {% else %}Ошибка{% endif %}
@@ -149,7 +166,22 @@
             </span>
             {% else %}—{% endif %}
           </td>
-          <td><a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">{% if r.status.value == 'error' %}Повторить{% else %}Открыть анализ{% endif %}</a></td>
+          <td style="white-space:nowrap">
+            {% if r.status.value == 'pending' and not r.analysis %}
+            <form method="post" action="/recording/{{ r.id }}/analyze" style="display:inline">
+              <button type="submit" class="btn btn-primary btn-sm">🤖 Анализ ИИ</button>
+            </form>
+            {% elif r.status.value == 'error' %}
+            <form method="post" action="/recording/{{ r.id }}/analyze" style="display:inline">
+              <button type="submit" class="btn btn-secondary btn-sm">Повторить</button>
+            </form>
+            <a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">Открыть</a>
+            {% elif r.status.value == 'done' %}
+            <a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">Открыть анализ</a>
+            {% else %}
+            <a href="/recording/{{ r.id }}" class="btn btn-ghost btn-sm">Статус</a>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -158,7 +190,7 @@
   {% else %}
   <div class="empty-state">
     <div class="icon">🎙️</div>
-    Загрузите первую папку с записями разговоров
+    Пока пусто — нажмите «Выбрать папку MicroSIP» выше
   </div>
   {% endif %}
 </div>
