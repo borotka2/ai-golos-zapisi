@@ -39,9 +39,10 @@
     <div>
       <h3>Запись готова к анализу</h3>
       <p>Файл уже на сайте{% if recording.source == 'microsip' %} (из MicroSIP){% endif %}. Нажмите кнопку — ИИ расшифрует и разберёт разговор.</p>
-      <form method="post" action="/recording/{{ recording.id }}/analyze" style="margin-top:12px">
+      <form method="post" action="/recording/{{ recording.id }}/analyze" style="margin-top:12px" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='В очереди…';">
         <button type="submit" class="btn btn-primary btn-glow">🤖 Запустить анализ ИИ</button>
       </form>
+      <p style="color:var(--muted);font-size:0.85rem;margin-top:8px">Если нажали несколько человек — записи идут по очереди, без ошибки.</p>
     </div>
   </div>
   {% endif %}
@@ -246,8 +247,12 @@
 <div class="card" id="processing-card" data-status="{{ recording.status.value }}">
   <div class="processing-box">
     <div class="processing-spinner"></div>
-    <h3>ИИ анализирует разговор...</h3>
-    <p style="color:var(--muted); margin-top:8px">Расшифровка аудио → поиск ошибок → рекомендации. Обычно 1–3 мин, длинные записи до 5 мин.</p>
+    <h3>{% if recording.status.value == 'processing' %}ИИ анализирует разговор...{% else %}В очереди на анализ...{% endif %}</h3>
+    <p style="color:var(--muted); margin-top:8px">
+      Расшифровка аудио → поиск ошибок → рекомендации.
+      {% if queue_pos and queue_pos > 1 %}Место в очереди: ≈{{ queue_pos }}. {% endif %}
+      Обычно 1–3 мин, при нагрузке (до 20 человек) может быть дольше — не нажимайте повторно.
+    </p>
   </div>
 </div>
 {% endif %}
