@@ -26,28 +26,68 @@ from .auth import (
     find_user,
     get_current_user,
     hash_password,
+    refresh_secret_key,
     require_admin,
+    wants_json,
 )
 from .database import UPLOADS_DIR, Base, engine, get_db
 from .microsip import display_when, file_sha256, parse_phone, parse_recorded_at
 from .recording_files import format_duration, get_audio_duration_seconds
 from .models import Analysis, FileType, Recording, RecordingStatus, User, UserRole
 
+# .env ДО секрета сессий — иначе cookie «Не авторизован» после логина
 load_dotenv()
+refresh_secret_key()
 
-# Параллельный анализ: несколько записей одновременно (очередь + воркеры)
-ANALYSIS_WORKERS = 7
+import os as _os
+
+# Для ~20 человек на free PythonAnywhere: 1 воркер + пауза = стабильно, без 429
+try:
+    ANALYSIS_WORKERS = max(1, min(3, int((_os.getenv("ANALYSIS_WORKERS") or "1").strip())))
+except ValueError:
+    ANALYSIS_WORKERS = 1
+try:
+    ANALYSIS_START_GAP_SEC = max(1.0, float((_os.getenv("ANALYSIS_START_GAP_SEC") or "3.0").strip()))
+except ValueError:
+    ANALYSIS_START_GAP_SEC = 3.0
+
 _analysis_executor = ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS, thread_name_prefix="ai-analyze")
 _analysis_queue: list[int] = []
+_analysis_inflight: set[int] = set()
 _analysis_queue_lock = threading.Lock()
 _analysis_dispatcher_started = False
 _analysis_active = 0
 _analysis_active_lock = threading.Lock()
-# Пауза между стартами, чтобы API (Groq/DeepSeek) не отдавал rate-limit на пачке
-ANALYSIS_START_GAP_SEC = 1.2
 
 app = FastAPI(title="Панель анализа разговоров")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+# Сессии: 14 дней, SameSite=Lax (работает на pythonanywhere.com), https_only=False
+# (на PA HTTPS часто на прокси, secure-cookie иначе не сохранится)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=refresh_secret_key(),
+    session_cookie="ai_golos_session",
+    max_age=60 * 60 * 24 * 14,
+    same_site="lax",
+    https_only=False,
+)
+
+
+@app.exception_handler(HTTPException)
+async def auth_friendly_http_exception(request: Request, exc: HTTPException):
+    """Браузер без логина видел JSON «Не авторизован» — ведём на /login."""
+    if exc.status_code in (401, 403) and not wants_json(request):
+        target = (exc.headers or {}).get("X-Auth-Redirect") or "/login"
+        # next= куда вернуться после входа
+        path = request.url.path or "/dashboard"
+        if path.startswith("/") and not path.startswith("/login") and "next=" not in target:
+            sep = "&" if "?" in target else "?"
+            target = f"{target}{sep}next={path}"
+        return RedirectResponse(url=target, status_code=302)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=dict(exc.headers or {}),
+    )
 app.mount("/static", StaticFiles(directory=Path(__file__).parent.parent / "static"), name="static")
 _template_dir = Path(__file__).parent.parent / "templates"
 _jinja_env = Environment(
@@ -166,10 +206,24 @@ def on_startup():
 def _friendly_analysis_error(exc: Exception) -> str:
     text = str(exc).strip()
     lower = text.lower()
+    if "401" in lower or "неверный или просроченный" in lower or "unauthorized" in lower or "invalid api key" in lower:
+        if "deepseek" in lower:
+            return (
+                "DeepSeek: неверный API-ключ. Откройте https://platform.deepseek.com/api_keys , "
+                "создайте новый ключ и вставьте DEEPSEEK_API_KEY в .env (админ → Настройки), затем Reload."
+            )
+        if "groq" in lower:
+            return "Groq: неверный API-ключ. Обновите GROQ_API_KEY в .env."
+        if "openai" in lower:
+            return "OpenAI: неверный API-ключ. Обновите OPENAI_API_KEY или используйте Groq+DeepSeek."
+        return "Неверный API-ключ сервиса ИИ. Проверьте ключи в .env / Настройках."
     if "connection error" in lower or "certificate_verify_failed" in lower:
         return "Ошибка соединения с сервисом ИИ. Повторите анализ через кнопку ниже."
-    if "rate limit" in lower or "429" in lower or "too many requests" in lower:
-        return "Слишком много запросов к ИИ. Подождите 1–2 минуты и нажмите «Повторить анализ»."
+    if "rate limit" in lower or "429" in lower or "too many requests" in lower or "лимит/квота" in lower:
+        return (
+            "Лимит запросов к ИИ (квота). Подождите 2–5 минут или смените ключ/тариф. "
+            "При Groq+DeepSeek OpenAI не нужен — проверьте DEEPSEEK_API_KEY."
+        )
     if "файл пустой" in lower or "не удалось получить текст" in lower:
         return "Не удалось распознать речь в записи. Проверьте, что файл не пустой и формат поддерживается."
     if "database is locked" in lower or ("sqlite" in lower and "locked" in lower):
@@ -192,11 +246,23 @@ def _ensure_dispatcher() -> None:
 
 
 def schedule_analysis(recording_id: int) -> None:
-    """Ставит запись в очередь — несколько файлов идут параллельно, без «ошибки 1» от rate-limit."""
+    """Очередь анализа: 20 человек жмут «Анализ» — идут по одному/двое, без шторма API."""
     _ensure_dispatcher()
     with _analysis_queue_lock:
-        if recording_id not in _analysis_queue:
-            _analysis_queue.append(recording_id)
+        if recording_id in _analysis_queue or recording_id in _analysis_inflight:
+            return
+        _analysis_queue.append(recording_id)
+
+
+def queue_position(recording_id: int) -> int | None:
+    """1 = сейчас в работе/следующий; None = не в очереди."""
+    with _analysis_queue_lock:
+        if recording_id in _analysis_inflight:
+            return 1
+        try:
+            return _analysis_queue.index(recording_id) + 1 + len(_analysis_inflight)
+        except ValueError:
+            return None
 
 
 def _analysis_dispatcher_loop() -> None:
@@ -209,6 +275,7 @@ def _analysis_dispatcher_loop() -> None:
             with _analysis_queue_lock:
                 if _analysis_queue:
                     recording_id = _analysis_queue.pop(0)
+                    _analysis_inflight.add(recording_id)
         if recording_id is None:
             time.sleep(0.35)
             continue
@@ -223,6 +290,8 @@ def _run_analysis_wrapper(recording_id: int) -> None:
     try:
         run_analysis(recording_id)
     finally:
+        with _analysis_queue_lock:
+            _analysis_inflight.discard(recording_id)
         with _analysis_active_lock:
             _analysis_active = max(0, _analysis_active - 1)
 
@@ -337,12 +406,25 @@ def index(request: Request):
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"error": None})
+def login_page(request: Request, next: str = ""):
+    dest = (next or "").strip()
+    if not dest.startswith("/") or dest.startswith("//"):
+        dest = ""
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"error": None, "pending": False, "next": dest},
+    )
 
 
 @app.post("/login", response_class=HTMLResponse)
-def login_submit(request: Request, username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form(""),
+    db: Session = Depends(get_db),
+):
     user, error_key = find_user(db, username.strip(), password)
     if error_key == "pending_approval":
         return templates.TemplateResponse(
@@ -363,7 +445,11 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
             status_code=400,
         )
     request.session["user_id"] = user.id
-    return RedirectResponse("/dashboard", status_code=302)
+    # после входа — на next (безопасный path) или кабинет
+    dest = (next or "").strip() or "/dashboard"
+    if not dest.startswith("/") or dest.startswith("//"):
+        dest = "/dashboard"
+    return RedirectResponse(dest, status_code=302)
 
 
 @app.get("/register", response_class=HTMLResponse)
@@ -702,6 +788,7 @@ def recording_detail(
             "analysis": analysis_data,
             "duration": duration,
             "can_download": user.role == UserRole.admin and file_path.exists(),
+            "queue_pos": queue_position(recording.id),
         },
     )
 
@@ -788,8 +875,18 @@ def start_analysis(
     if not recording or not can_access_recording(user, recording.user_id):
         raise HTTPException(status_code=404, detail="Запись не найдена")
 
+    # Уже идёт / в очереди — не 409, а спокойный редирект (двойной клик 20 человек)
     if recording.status == RecordingStatus.processing:
-        raise HTTPException(status_code=409, detail="Анализ уже идёт")
+        if "application/json" in (request.headers.get("accept") or ""):
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "status": "processing",
+                    "queue": queue_position(recording.id),
+                    "redirect": f"/recording/{recording_id}",
+                }
+            )
+        return RedirectResponse(f"/recording/{recording_id}", status_code=302)
     if recording.status == RecordingStatus.done and recording.analysis:
         if "application/json" in (request.headers.get("accept") or ""):
             return JSONResponse({"ok": True, "status": "done", "redirect": f"/recording/{recording_id}"})
@@ -799,9 +896,17 @@ def start_analysis(
     recording.error_message = None
     db.commit()
     schedule_analysis(recording.id)
+    pos = queue_position(recording.id)
 
     if "application/json" in (request.headers.get("accept") or ""):
-        return JSONResponse({"ok": True, "status": "pending", "redirect": f"/recording/{recording_id}"})
+        return JSONResponse(
+            {
+                "ok": True,
+                "status": "pending",
+                "queue": pos,
+                "redirect": f"/recording/{recording_id}",
+            }
+        )
     return RedirectResponse(f"/recording/{recording_id}", status_code=302)
 
 

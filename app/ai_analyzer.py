@@ -109,6 +109,27 @@ def is_api_quota_error(exc: Exception) -> bool:
     )
 
 
+def is_auth_error(exc: Exception) -> bool:
+    """Неверный/просроченный API-ключ — ретраи бессмысленны."""
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None)
+    if status in (401, 403):
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "401",
+            "403",
+            "unauthorized",
+            "authentication",
+            "invalid api key",
+            "incorrect api key",
+            "invalid_api_key",
+            "permission denied",
+        )
+    )
+
+
 def is_connection_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(
@@ -125,7 +146,25 @@ def is_connection_error(exc: Exception) -> bool:
 
 
 def is_retriable_error(exc: Exception) -> bool:
-    return is_api_quota_error(exc) or is_connection_error(exc)
+    # 401/403 не ретраим — иначе засыпаем OpenAI 429-ретраями после мёртвого DeepSeek
+    if is_auth_error(exc):
+        return False
+    return is_connection_error(exc) or is_api_quota_error(exc)
+
+
+def _provider_error(provider: str, exc: Exception) -> RuntimeError:
+    if is_auth_error(exc):
+        return RuntimeError(
+            f"{provider}: неверный или просроченный API-ключ (401). "
+            f"Обновите ключ в .env / Настройках админа."
+        )
+    if is_api_quota_error(exc):
+        return RuntimeError(
+            f"{provider}: лимит/квота исчерпаны (429). "
+            f"Подождите или смените ключ / тариф."
+        )
+    msg = str(exc).strip() or exc.__class__.__name__
+    return RuntimeError(f"{provider}: {msg[:400]}")
 
 
 def is_demo_mode() -> bool:
@@ -138,18 +177,15 @@ def is_demo_mode() -> bool:
 def openai_config_status() -> tuple[bool, str]:
     if is_demo_mode():
         return True, "Демо-режим: анализ без ИИ (для теста интерфейса)"
-    if prefer_groq_deepseek():
-        note = ""
-        if has_openai_key():
-            note = " (OpenAI пропущен — нет квоты или выбран Groq+DeepSeek)"
-        return True, f"Реальный анализ: Groq (транскрипция) + DeepSeek (анализ){note}"
+    if has_groq_key() and has_deepseek_key():
+        return True, "Реальный анализ: Groq (речь) + DeepSeek/Groq LLM (отчёт), очередь для ~20 человек"
+    if has_groq_key():
+        return True, "Реальный анализ: Groq (транскрипция + LLM-отчёт)"
     if has_openai_key():
         return True, "OpenAI API ключ настроен"
-    if has_groq_key():
-        return False, "Задан GROQ_API_KEY, но нет DEEPSEEK_API_KEY для анализа"
     if has_deepseek_key():
         return False, "Задан DEEPSEEK_API_KEY, но нет GROQ_API_KEY для транскрипции аудио"
-    return False, "Не заданы API-ключи — добавьте OPENAI_API_KEY или GROQ+DEEPSEEK в .env"
+    return False, "Не заданы API-ключи — добавьте GROQ_API_KEY (и желательно DEEPSEEK_API_KEY) в .env"
 
 
 def get_openai_client() -> OpenAI:
@@ -158,11 +194,12 @@ def get_openai_client() -> OpenAI:
         raise RuntimeError(
             "Не задан OPENAI_API_KEY. Добавьте ключ в .env или используйте GROQ_API_KEY + DEEPSEEK_API_KEY"
         )
+    # max_retries=1: при 429 не долбим API десятками повторов (главный источник «вечных» ошибок)
     return OpenAI(
         api_key=api_key,
         http_client=get_api_http_client(),
         timeout=API_TIMEOUT_SEC,
-        max_retries=5,
+        max_retries=1,
     )
 
 
@@ -175,7 +212,7 @@ def get_groq_client() -> OpenAI:
         base_url="https://api.groq.com/openai/v1",
         http_client=get_api_http_client(),
         timeout=API_TIMEOUT_SEC,
-        max_retries=5,
+        max_retries=2,
     )
 
 
@@ -188,7 +225,7 @@ def get_deepseek_client() -> OpenAI:
         base_url="https://api.deepseek.com",
         http_client=get_api_http_client(),
         timeout=API_TIMEOUT_SEC,
-        max_retries=5,
+        max_retries=1,
     )
 
 
@@ -196,14 +233,16 @@ def _transcribe_with_client(client: OpenAI, model: str, path: Path, mime: str) -
     chunks = prepare_audio_chunks(path)
     texts: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
+        # Для mp3-чанков всегда audio/mpeg; иначе API может отвергнуть файл
+        chunk_mime = "audio/mpeg" if chunk.suffix.lower() == ".mp3" else mime
         upload_name = chunk.name if len(chunks) == 1 else f"{path.stem}_part{index}.mp3"
         last_exc: Exception | None = None
-        for attempt in range(6):
+        for attempt in range(3):
             try:
                 with chunk.open("rb") as audio_file:
                     result = client.audio.transcriptions.create(
                         model=model,
-                        file=(upload_name, audio_file, mime),
+                        file=(upload_name, audio_file, chunk_mime),
                         language="ru",
                         prompt=WHISPER_PROMPT,
                         temperature=0,
@@ -215,8 +254,8 @@ def _transcribe_with_client(client: OpenAI, model: str, path: Path, mime: str) -
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt < 5 and is_retriable_error(exc):
-                    time.sleep(min(2 ** attempt, 30))
+                if attempt < 2 and is_retriable_error(exc) and not is_auth_error(exc):
+                    time.sleep(min(2 ** attempt, 15))
                     continue
                 raise
         if last_exc:
@@ -238,17 +277,20 @@ def transcribe_audio(path: Path) -> str:
 
     errors: list[Exception] = []
 
+    # Основной путь: Groq (работает). OpenAI whisper — только если нет Groq.
     if has_groq_key():
         try:
             return _transcribe_with_client(get_groq_client(), "whisper-large-v3", path, mime)
         except Exception as exc:
-            errors.append(exc)
+            if prefer_groq_deepseek() and not is_connection_error(exc):
+                raise _provider_error("Groq (транскрипция)", exc) from exc
+            errors.append(_provider_error("Groq (транскрипция)", exc))
 
-    if has_openai_key():
+    if has_openai_key() and not prefer_groq_deepseek():
         try:
             return _transcribe_with_client(get_openai_client(), "whisper-1", path, mime)
         except Exception as exc:
-            errors.append(exc)
+            errors.append(_provider_error("OpenAI Whisper", exc))
 
     if errors:
         raise errors[-1]
@@ -326,7 +368,12 @@ def _build_analysis_prompt(transcript: str) -> str:
 
 def _analyze_with_client(client: OpenAI, model: str, transcript: str) -> dict:
     last_exc: Exception | None = None
-    for attempt in range(4):
+    # Лимит текста: слишком длинный prompt + эталоны → таймауты/ошибки на free PA
+    text = (transcript or "").strip()
+    if len(text) > 48000:
+        text = text[:48000] + "\n…[транскрипт обрезан для анализа]"
+
+    for attempt in range(3):
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -339,7 +386,7 @@ def _analyze_with_client(client: OpenAI, model: str, transcript: str) -> dict:
                             "Учитывай весь текст транскрипта целиком."
                         ),
                     },
-                    {"role": "user", "content": _build_analysis_prompt(transcript)},
+                    {"role": "user", "content": _build_analysis_prompt(text)},
                 ],
                 temperature=0.2,
                 response_format={"type": "json_object"},
@@ -348,8 +395,10 @@ def _analyze_with_client(client: OpenAI, model: str, transcript: str) -> dict:
             return json.loads(content)
         except Exception as exc:
             last_exc = exc
-            if attempt < 3 and is_retriable_error(exc):
-                time.sleep(min(2 ** attempt, 20))
+            if is_auth_error(exc):
+                raise
+            if attempt < 2 and is_retriable_error(exc):
+                time.sleep(min(2 ** attempt, 12))
                 continue
             raise
     if last_exc:
@@ -358,24 +407,44 @@ def _analyze_with_client(client: OpenAI, model: str, transcript: str) -> dict:
 
 
 def analyze_transcript(transcript: str) -> dict:
+    """Анализ текста: DeepSeek → Groq LLM → OpenAI.
+
+    Важно для 20+ человек: если DeepSeek 401/квота — не роняем всех,
+    уходим на Groq (тот же ключ, что и для Whisper).
+    """
     errors: list[Exception] = []
 
     if has_deepseek_key():
         try:
             return _analyze_with_client(get_deepseek_client(), "deepseek-chat", transcript)
         except Exception as exc:
-            errors.append(exc)
+            # 401/429 — пробуем следующий провайдер, не блокируем всю команду
+            errors.append(_provider_error("DeepSeek (анализ)", exc))
+            print(f"[analyze] DeepSeek fail → fallback: {exc}", flush=True)
+
+    if has_groq_key():
+        # Качественная модель, затем быстрая (лимиты free tier)
+        for model in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+            try:
+                return _analyze_with_client(get_groq_client(), model, transcript)
+            except Exception as exc:
+                errors.append(_provider_error(f"Groq/{model}", exc))
+                print(f"[analyze] Groq {model} fail: {exc}", flush=True)
+                if is_auth_error(exc):
+                    break
+                continue
 
     if has_openai_key():
         try:
             return _analyze_with_client(get_openai_client(), "gpt-4o-mini", transcript)
         except Exception as exc:
-            errors.append(exc)
+            errors.append(_provider_error("OpenAI (анализ)", exc))
 
     if errors:
-        raise errors[-1]
+        # Самая полезная ошибка: не «OpenAI 429», а первая реальная (часто DeepSeek 401)
+        raise errors[0]
 
-    raise RuntimeError("Нет ключа для анализа разговоров (OpenAI или DeepSeek)")
+    raise RuntimeError("Нет ключа для анализа разговоров (DeepSeek / Groq / OpenAI)")
 
 
 CHAT_PROMPT = """Ты — ИИ-помощник по контролю качества разговоров операторов.
@@ -401,57 +470,41 @@ def ask_about_recording(transcript: str, summary: str, question: str) -> str:
     if is_demo_mode():
         return demo_chat_answer(question)
 
-    if prefer_groq_deepseek() or (has_deepseek_key() and not has_openai_key()):
-        client = get_deepseek_client()
-        model = "deepseek-chat"
-    elif has_openai_key():
+    prompt = CHAT_PROMPT.format(
+        transcript=(transcript or "")[:15000],
+        summary=summary or "Резюме не предоставлено",
+        question=question.strip(),
+    )
+    messages = [
+        {"role": "system", "content": "Ты помогаешь сотрудникам улучшать телефонные разговоры."},
+        {"role": "user", "content": prompt},
+    ]
+    candidates: list[tuple[OpenAI, str]] = []
+    if has_deepseek_key():
+        candidates.append((get_deepseek_client(), "deepseek-chat"))
+    if has_groq_key():
+        candidates.append((get_groq_client(), "llama-3.3-70b-versatile"))
+        candidates.append((get_groq_client(), "llama-3.1-8b-instant"))
+    if has_openai_key():
+        candidates.append((get_openai_client(), "gpt-4o-mini"))
+    if not candidates:
+        raise RuntimeError("Нет ключа для чата с ИИ")
+
+    last_exc: Exception | None = None
+    for client, model in candidates:
         try:
-            client = get_openai_client()
-            model = "gpt-4o-mini"
             response = client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": "Ты помогаешь сотрудникам улучшать телефонные разговоры."},
-                    {
-                        "role": "user",
-                        "content": CHAT_PROMPT.format(
-                            transcript=transcript[:15000],
-                            summary=summary or "Резюме не предоставлено",
-                            question=question.strip(),
-                        ),
-                    },
-                ],
+                messages=messages,
                 temperature=0.5,
             )
             return (response.choices[0].message.content or "Не удалось получить ответ").strip()
         except Exception as exc:
-            if has_deepseek_key() and is_api_quota_error(exc):
-                client = get_deepseek_client()
-                model = "deepseek-chat"
-            else:
-                raise
-    elif has_deepseek_key():
-        client = get_deepseek_client()
-        model = "deepseek-chat"
-    else:
-        raise RuntimeError("Нет ключа для чата с ИИ")
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": "Ты помогаешь сотрудникам улучшать телефонные разговоры."},
-            {
-                "role": "user",
-                "content": CHAT_PROMPT.format(
-                    transcript=transcript[:15000],
-                    summary=summary or "Резюме не предоставлено",
-                    question=question.strip(),
-                ),
-            },
-        ],
-        temperature=0.5,
-    )
-    return (response.choices[0].message.content or "Не удалось получить ответ").strip()
+            last_exc = exc
+            continue
+    if last_exc:
+        raise _provider_error("Чат с ИИ", last_exc)
+    raise RuntimeError("Не удалось получить ответ ИИ")
 
 
 DEMO_TRANSCRIPT = """Менеджер: Добрый день, компания «Профи», меня зовут Алексей. Чем могу помочь?
