@@ -11,6 +11,13 @@ from .models import User, UserRole
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production-please")
 
 
+def refresh_secret_key() -> str:
+    """Перечитать SECRET_KEY после load_dotenv() — иначе cookie-сессии «ломаются»."""
+    global SECRET_KEY
+    SECRET_KEY = (os.getenv("SECRET_KEY") or SECRET_KEY or "change-me-in-production-please").strip()
+    return SECRET_KEY
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -38,13 +45,44 @@ def find_user(db: Session, username: str, password: str) -> tuple[Optional[User]
     return user, None
 
 
+def wants_json(request: Request) -> bool:
+    accept = (request.headers.get("accept") or "").lower()
+    if "application/json" in accept and "text/html" not in accept:
+        return True
+    if (request.headers.get("x-requested-with") or "").lower() == "xmlhttprequest":
+        return True
+    path = request.url.path or ""
+    return path.startswith("/api/")
+
+
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """
+    Без сессии:
+      - API/JSON → 401 JSON
+      - браузер  → 401 с headers, exception handler сделает redirect на /login
+    """
     user_id = request.session.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Не авторизован")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Не авторизован",
+            headers={"X-Auth-Redirect": "/login"},
+        )
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
+        request.session.clear()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Пользователь не найден",
+            headers={"X-Auth-Redirect": "/login"},
+        )
+    if user.role == UserRole.manager and not user.is_approved:
+        request.session.clear()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Аккаунт ещё не одобрен администратором",
+            headers={"X-Auth-Redirect": "/login?pending=1"},
+        )
     return user
 
 

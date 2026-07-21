@@ -17,13 +17,14 @@
 {% endif %}
 
 <form method="post" action="/login" class="auth-form">
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
   <div class="form-group">
     <label>Логин</label>
-    <input type="text" name="username" required autofocus placeholder="your_login">
+    <input type="text" name="username" required autofocus placeholder="your_login" autocomplete="username">
   </div>
   <div class="form-group">
     <label>Пароль</label>
-    <input type="password" name="password" required placeholder="••••••••">
+    <input type="password" name="password" required placeholder="••••••••" autocomplete="current-password">
   </div>
   <button type="submit" class="btn btn-primary btn-glow" style="width:100%">Войти</button>
 </form>
